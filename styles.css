@@ -190,6 +190,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .form-actions { padding: 16px 22px; display: flex; justify-content: flex-end; gap: 10px; background: var(--surface-2); }
 
 .diagnosis-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; margin-bottom: 18px; }
+.diagnosis-decision { display: flex; gap: 14px; align-items: flex-start; padding: 18px 20px; border: 1px solid #b8e9db; border-radius: 8px; background: #f4fdf9; margin-bottom: 16px; }
+.diagnosis-decision.blocked { border-color: #efd6ad; background: #fff9ed; }
+.decision-symbol { width: 30px; height: 30px; flex: 0 0 auto; border-radius: 50%; display: grid; place-items: center; background: var(--primary); color: #fff; font-weight: 800; }
+.diagnosis-decision.blocked .decision-symbol { background: var(--amber); }
+.diagnosis-decision h2 { margin: 0 0 5px; font-size: 17px; }
+.diagnosis-decision p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.diagnosis-decision ul { margin: 9px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
+.diagnosis-actions { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px 22px; background: #fff; border: 1px solid var(--line); border-radius: 8px; margin-top: 18px; }
+.diagnosis-actions strong { display: block; font-size: 15px; }
+.diagnosis-actions p { margin: 5px 0 0; max-width: 670px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.diagnosis-buttons { display: flex; flex: 0 0 auto; gap: 9px; }
+.risk-carry-note { max-width: 900px; margin: 0 auto 16px; padding: 11px 14px; background: #fff9ed; border-left: 3px solid var(--amber); color: #71511d; font-size: 12px; line-height: 1.7; }
 .metric { border: 1px solid var(--line); border-radius: 7px; padding: 14px; background: white; }
 .metric-value { font-size: 24px; font-weight: 800; margin-top: 8px; }
 .metric.success .metric-value { color: var(--primary-dark); }
@@ -437,6 +449,10 @@ th { color: var(--muted); font-weight: 700; background: var(--surface-2); }
   .report-score { font-size: 44px; }
   .preparation-steps i { width: 28px; }
   .consent-panel,.device-panel { max-width: 100%; }
+  .diagnosis-decision { padding: 15px; }
+  .diagnosis-actions { display: grid; padding: 16px; }
+  .diagnosis-buttons { display: grid; grid-template-columns: 1fr 1fr; }
+  .diagnosis-buttons .button { min-width: 0; padding-inline: 6px; font-size: 12px; white-space: nowrap; }
   .page-header { display: block; }
   .page-header h1 { font-size: 24px; }
   .header-actions { margin-top: 16px; }
