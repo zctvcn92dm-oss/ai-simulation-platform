@@ -17,8 +17,30 @@ const state = {
   replayPlaying: false,
   replayTimer: null,
   selectedQuestion: 0,
+  workflowReached: 0,
+  workflowExpanded: false,
+  workflowStale: false,
+  mobileMenuOpen: false,
   toast: ''
 };
+
+const workflowSteps = [
+  ['训练设置', 'competition'], ['赛前诊断', 'diagnosis'], ['演练准备', 'consent'],
+  ['PPT陈述', 'presentation'], ['评委答辩', 'jury'], ['训练报告', 'report']
+];
+const workflowViews = {competition:0, diagnosis:1, consent:2, device:2, presentation:3, jury:4, report:5};
+const storedWorkflow = (() => { try { return JSON.parse(localStorage.getItem('ai-simulation-workflow') || '{}'); } catch { return {}; } })();
+if (storedWorkflow.view && Object.prototype.hasOwnProperty.call(workflowViews, storedWorkflow.view)) {
+  Object.assign(state, {
+    view: storedWorkflow.view, workflowReached: storedWorkflow.workflowReached || 0,
+    fileUploaded: !!storedWorkflow.fileUploaded, track: storedWorkflow.track || state.track,
+    mode: storedWorkflow.mode || state.mode, form: {...state.form, ...storedWorkflow.form},
+    presentationSlide: storedWorkflow.presentationSlide || 1,
+    presentationSeconds: Number.isFinite(storedWorkflow.presentationSeconds) ? storedWorkflow.presentationSeconds : 420,
+    judgeIndex: storedWorkflow.judgeIndex || 0, questionIndex: storedWorkflow.questionIndex || 0,
+    messages: storedWorkflow.messages || [], workflowStale: !!storedWorkflow.workflowStale
+  });
+}
 
 const navStudent = [
   ['dashboard','⌂','工作台'], ['teacher-trial','▤','师范生模拟试讲'], ['competition','◈','职规赛模拟答辩'],
@@ -43,23 +65,62 @@ const questions = [
 function setView(view){
   if(state.presentationTimer){ clearInterval(state.presentationTimer); state.presentationTimer = null; }
   if(state.replayTimer){ clearInterval(state.replayTimer); state.replayTimer = null; state.replayPlaying = false; }
-  state.view=view; window.scrollTo(0,0); render();
+  state.view=view;
+  state.mobileMenuOpen=false;
+  state.workflowExpanded=false;
+  if(Object.prototype.hasOwnProperty.call(workflowViews, view)) state.workflowReached=Math.max(state.workflowReached,workflowViews[view]);
+  window.scrollTo(0,0); render();
 }
 function setRole(role){ state.role=role; setView(role==='teacher'?'teacher':'dashboard'); }
 function showToast(message){ state.toast=message; render(); setTimeout(()=>{state.toast='';render()},1800); }
 function button(label, action, variant=''){ return `<button class="button ${variant}" onclick="${action}">${label}</button>`; }
+function persistWorkflow(){
+  try { localStorage.setItem('ai-simulation-workflow', JSON.stringify({
+    view:state.view, workflowReached:state.workflowReached, fileUploaded:state.fileUploaded,
+    track:state.track, mode:state.mode, form:state.form, presentationSlide:state.presentationSlide,
+    presentationSeconds:state.presentationSeconds, judgeIndex:state.judgeIndex,
+    questionIndex:state.questionIndex, messages:state.messages, workflowStale:state.workflowStale
+  })); } catch {}
+}
+function workflowProgress(compact=false){
+  const current=workflowViews[state.view] ?? 0;
+  const substep=state.view==='consent'?'录制授权 · 1/2':state.view==='device'?'设备检测 · 2/2':'';
+  return `<section class="workflow-progress ${compact?'compact':''} ${state.workflowExpanded?'expanded':''}" aria-label="训练流程">
+    <button class="workflow-mobile-summary" type="button" aria-expanded="${state.workflowExpanded}" onclick="state.workflowExpanded=!state.workflowExpanded;render()"><span><small>步骤 ${current+1}/6${substep?' · '+substep:''}</small><strong>${workflowSteps[current][0]}</strong></span><span aria-hidden="true">${state.workflowExpanded?'⌃':'⌄'}</span></button>
+    <div class="workflow-track">${workflowSteps.map(([label],i)=>{
+      const status=i<current?'done':i===current?'active':'pending';
+      return `<button type="button" class="workflow-step ${status}" ${i<current?`onclick="goWorkflowStep(${i})"`:'disabled'} ${i===current?'aria-current="step"':''} aria-label="第${i+1}步 ${label}，${status==='done'?'已完成':status==='active'?'当前环节':'未开始'}"><span class="workflow-index">${i<current?'✓':i+1}</span><span class="workflow-label"><strong>${label}</strong><small>${i<current?'已完成':i===current?(substep||'当前环节'):'未开始'}</small></span></button>`;
+    }).join('')}</div></section>`;
+}
+function goWorkflowStep(index){
+  if(index >= (workflowViews[state.view] ?? 0)) return;
+  setView(workflowSteps[index][1]);
+}
+function updateTrainingValue(key,value){
+  if(key in state.form) state.form[key]=value; else state[key]=value;
+  if(state.workflowReached>0) state.workflowStale=true;
+  if(state.workflowStale && state.view==='competition' && !document.querySelector('.version-warning')){
+    document.querySelector('.workflow-progress').insertAdjacentHTML('afterend','<div class="version-warning"><strong>训练内容已修改</strong><span>请重新生成赛前诊断。此前的报告仍可在“我的训练”中查看。</span></div>');
+  }
+  persistWorkflow();
+}
+function changeMaterial(){
+  state.fileUploaded=false;
+  if(state.workflowReached>0) state.workflowStale=true;
+  render();
+}
 
 function shell(content){
   const nav = state.role==='student'?navStudent:navTeacher;
   return `<div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">AI</span><span>AI模拟演练</span></div>
+    <aside class="sidebar ${state.mobileMenuOpen?'open':''}">
+      <div class="brand"><span class="brand-mark">AI</span><span>AI模拟演练</span><button class="mobile-menu-close" aria-label="关闭菜单" onclick="state.mobileMenuOpen=false;render()">×</button></div>
       <nav class="nav">${nav.map(([id,icon,label])=>`<button class="nav-button ${state.view===id?'active':''}" onclick="setView('${id}')"><span class="nav-icon">${icon}</span><span>${label}</span></button>`).join('')}</nav>
       <div class="sidebar-footer"><div class="small-label">当前学校</div><div class="school-name">云研大学</div></div>
     </aside>
     <section class="content-shell">
       <header class="topbar">
-        <button class="button icon-button mobile-menu" aria-label="打开菜单">☰</button>
+        <button class="button icon-button mobile-menu" aria-label="${state.mobileMenuOpen?'关闭菜单':'打开菜单'}" aria-expanded="${state.mobileMenuOpen}" onclick="state.mobileMenuOpen=!state.mobileMenuOpen;render()">☰</button>
         <div class="topbar-title">${state.role==='student'?'学生训练中心':'教师指导中心'}</div>
         <div class="topbar-actions">
           <div class="role-switch"><button class="${state.role==='student'?'active':''}" onclick="setRole('student')">学生</button><button class="${state.role==='teacher'?'active':''}" onclick="setRole('teacher')">教师</button></div>
@@ -98,18 +159,17 @@ function recommend(icon,title,desc,time){return `<div class="recommend-item"><di
 function teacherTrial(){return shell(`<div class="page-header"><div><h1>师范生模拟试讲</h1><p>延续现有抽题与教学演练流程，并修复启动异常与页面横向溢出。</p></div>${button('开始智能抽题',"showToast('已创建小学数学试讲：认识轴对称图形')",'primary')}</div><div class="panel"><div class="panel-header"><h2>训练配置</h2><span class="tag">教师资格证考试</span></div><div class="panel-body form-grid"><div class="field"><label>试讲学科</label><select><option>小学数学</option><option>语文</option><option>数学</option></select></div><div class="field"><label>试讲受众</label><select><option>小学生</option></select></div><div class="field"><label>试讲时长</label><select><option>5分钟</option><option>10分钟</option></select></div><div class="field"><label>课件材料</label><div class="file-card"><span>轴对称图形教学课件.pptx</span><span class="tag">已解析</span></div></div></div><div class="form-actions">${button('查看历史记录',"setView('records')")}${button('开始试讲',"showToast('试讲环境检测完成，可正常开始')",'primary')}</div></div>`)}
 
 function competition(){
-  return shell(`<div class="page-header"><div><h1>创建职规赛模拟答辩</h1><p>材料将用于赛前诊断、陈述分析和五位AI评委针对性追问。</p></div><span class="tag cyan">规则模板：第三届国赛·平台示例版 V1.0</span></div>
-  <div class="wizard"><aside class="steps">${['基本信息','上传材料','赛前诊断','PPT陈述','评委答辩','训练报告'].map((x,i)=>`<div class="step ${i===0?'active':''}"><span class="step-index">${i+1}</span><span>${x}</span></div>`).join('')}</aside>
-  <section class="form-panel"><div class="form-section"><h2>选择训练场景</h2><p class="section-help">成长赛道与就业赛道使用独立的材料要求、问题策略和评价量表。</p><div class="segment"><button class="${state.track==='成长赛道'?'active':''}" onclick="state.track='成长赛道';render()"><strong>成长赛道</strong><span>重点评价职业目标、学习实践行动与动态调整</span></button><button class="${state.track==='就业赛道'?'active':''}" onclick="state.track='就业赛道';render()"><strong>就业赛道</strong><span>重点评价岗位胜任力、求职实战与发展潜力</span></button></div></div>
-  <div class="form-section"><h2>参赛信息</h2><p class="section-help">结构化信息将和PPT内容共同用于生成专业化追问。</p><div class="form-grid">
-    ${field('专业','major')}${field('年级','grade')}${field('目标职业','targetCareer')}${field('目标行业','industry')}
-    <div class="field full"><label>训练模式</label><div class="segment"><button class="${state.mode==='正式模拟'?'active':''}" onclick="state.mode='正式模拟';render()"><strong>正式模拟</strong><span>完整陈述后集中答辩，严格跟随规则模板</span></button><button class="${state.mode==='专项训练'?'active':''}" onclick="state.mode='专项训练';render()"><strong>专项训练</strong><span>聚焦专业知识、证据核验或临场应变</span></button></div></div>
-  </div></div>
-  <div class="form-section"><h2>上传参赛PPT</h2><p class="section-help">原型使用本地模拟文件，不会上传真实材料。</p>${state.fileUploaded?`<div class="file-card"><div><strong>数字教育产品经理成长规划.pptx</strong><div class="training-meta">18页 · 24.6 MB · 已生成材料版本 V3</div></div><div><span class="tag">解析完成</span> <button class="text-link" onclick="state.fileUploaded=false;render()">重新选择</button></div></div>`:`<div class="upload-zone"><strong>选择PPT文件或拖入此处</strong><p>支持 PPT、PPTX，建议控制在100MB以内</p>${button('模拟上传PPT',"state.fileUploaded=true;showToast('PPT解析完成，已生成材料版本 V3')",'secondary')}</div>`}</div>
-  <div class="form-actions">${button('保存草稿',"showToast('草稿已保存')")}${button('开始赛前诊断',"startDiagnosis()",'primary')}</div></section></div>`);
+  return shell(`<div class="training-workspace"><div class="page-header"><div><h1>创建职规赛模拟答辩</h1><p>完善训练信息和参赛材料，开始一次完整的模拟演练。</p></div><div class="rule-version"><span>当前规则模板</span><strong>第三届国赛·平台示例版 V1.0</strong></div></div>
+  ${workflowProgress()}
+  ${state.workflowStale?`<div class="version-warning"><strong>训练内容已修改</strong><span>请重新生成赛前诊断。此前的报告仍可在“我的训练”中查看。</span></div>`:''}
+  <section class="form-panel setup-panel"><div class="form-section"><div class="section-heading"><span>01</span><div><h2>训练场景与模式</h2><p class="section-help">选择适合你的赛道与训练方式。</p></div></div><div class="segment"><button class="${state.track==='成长赛道'?'active':''}" onclick="updateTrainingValue('track','成长赛道');render()"><strong>成长赛道</strong><span>职业目标、学习实践行动与动态调整</span></button><button class="${state.track==='就业赛道'?'active':''}" onclick="updateTrainingValue('track','就业赛道');render()"><strong>就业赛道</strong><span>岗位胜任力、求职实战与发展潜力</span></button></div><div class="mode-setting"><strong>训练模式</strong><div class="mode-toggle"><button class="${state.mode==='正式模拟'?'active':''}" onclick="updateTrainingValue('mode','正式模拟');render()">正式模拟</button><button class="${state.mode==='专项训练'?'active':''}" onclick="updateTrainingValue('mode','专项训练');render()">专项训练</button></div><small>${state.mode==='正式模拟'?'完整陈述后进入集中答辩':'聚焦某项能力进行短时训练'}</small></div></div>
+  <div class="form-section"><div class="section-heading"><span>02</span><div><h2>参赛基础信息</h2><p class="section-help">评委将结合这些信息和PPT内容提问。</p></div></div><div class="form-grid">${field('专业','major')}${field('年级','grade')}${field('目标职业','targetCareer')}${field('目标行业','industry')}</div></div>
+  <div class="form-section"><div class="section-heading"><span>03</span><div><h2>参赛PPT</h2><p class="section-help">原型使用模拟材料，不上传真实文件。</p></div></div>${state.fileUploaded?`<div class="file-card material-summary"><div class="file-symbol">P</div><div class="file-details"><strong>数字教育产品经理成长规划.pptx</strong><span>18页 · 24.6 MB · 材料版本 V3</span></div><span class="tag">解析完成</span><button class="text-link" onclick="changeMaterial()">重新选择</button></div>`:`<div class="upload-zone"><span class="upload-arrow">↑</span><strong>选择PPT文件或拖入此处</strong><p>支持 PPT、PPTX，建议控制在100MB以内</p>${button('模拟上传PPT',"state.fileUploaded=true;showToast('PPT解析完成，已生成材料版本 V3')",'secondary')}</div>`}</div>
+  <div class="form-section"><div class="section-heading"><span>04</span><div><h2>本次训练规则</h2><p class="section-help">正式时间和评审方式以当前模板为准。</p></div></div><div class="rule-grid"><div><span>赛道</span><strong>${state.track}</strong></div><div><span>陈述时间</span><strong>7分钟</strong></div><div><span>评审方式</span><strong>五位AI评委</strong></div><div><span>答辩阶段</span><strong>陈述后集中进行</strong></div></div></div>
+  <div class="form-actions setup-actions"><div class="action-context"><strong>下一步：赛前诊断</strong><span>${state.fileUploaded?'材料已就绪，可以继续':'上传PPT后可以继续'}</span></div><div class="action-buttons">${button('保存草稿',"persistWorkflow();showToast('草稿已保存')")}${button('开始赛前诊断',"startDiagnosis()",'primary')}</div></div></section></div>`);
 }
-function field(label,key){return `<div class="field"><label>${label} <span class="required">*</span></label><input value="${state.form[key]}" oninput="state.form.${key}=this.value" /></div>`}
-function startDiagnosis(){ if(!state.fileUploaded){showToast('请先上传参赛PPT');return;} setView('diagnosis'); }
+function field(label,key){return `<div class="field"><label>${label} <span class="required">*</span></label><input value="${state.form[key]}" oninput="updateTrainingValue('${key}',this.value)" /></div>`}
+function startDiagnosis(){ if(!state.fileUploaded){showToast('请先上传参赛PPT');return;} if(Object.values(state.form).some(value=>!value.trim())){showToast('请先完善必填信息');return;} if(state.workflowStale && !window.confirm('参赛信息或PPT已变更。继续将重新生成赛前诊断，原报告仍保留在我的训练中。')) return; state.workflowStale=false; setView('diagnosis'); }
 
 function diagnosis(){return shell(`<div class="page-header"><div><h1>赛前诊断</h1><p>${state.track} · 材料版本 V3 · 规则模板 V1.0</p></div><div class="header-actions">${button('返回修改',"setView('competition')")}${button('查看录制说明',"setView('consent')",'primary')}</div></div>
   <div class="diagnosis-summary"><div class="metric success"><span class="small-label">材料完整度</span><div class="metric-value">92%</div></div><div class="metric success"><span class="small-label">指标覆盖</span><div class="metric-value">8/10</div></div><div class="metric warning"><span class="small-label">高风险表述</span><div class="metric-value">2项</div></div><div class="metric"><span class="small-label">预计陈述时长</span><div class="metric-value">6'40"</div></div></div>
@@ -169,6 +229,17 @@ function nearestEvent(){return timelineEvents.reduce((best,x)=>Math.abs(x.time-s
 
 function reportQuestions(){const q=questionReplays[state.selectedQuestion];const j=judges[q.judge];return `<div class="question-review-layout"><aside class="panel question-nav"><div class="panel-header"><h2>问答目录</h2></div>${questionReplays.map((x,i)=>`<button class="${i===state.selectedQuestion?'active':''}" onclick="state.selectedQuestion=${i};state.replayTime=${x.time};render()"><span>${i+1}</span><div><strong>${judges[x.judge].name}</strong><small>${x.duration} · 得分 ${x.score}</small></div></button>`).join('')}</aside><section><div class="panel"><div class="question-heading"><div class="judge-avatar">${j.icon}</div><div><span class="small-label">${j.name} · 原始语音与题干</span><h2>${q.question}</h2></div><button class="button" onclick="showToast('正在播放AI评委原始提问语音')">▶ 播放问题</button></div></div><div style="margin-top:16px">${replayPlayer()}</div><div class="panel" style="margin-top:16px"><div class="panel-header"><h2>学生回答转写</h2><span class="tag">回答 ${q.duration}</span></div><div class="panel-body answer-transcript">${q.answer}</div></div><div class="answer-analysis-grid"><div class="panel"><div class="panel-header"><h2>回答分析</h2><strong class="score">${q.score}</strong></div><div class="panel-body risk-list"><div class="risk positive"><strong>表现较好</strong><p>${q.good}</p></div><div class="risk"><strong>内容遗漏</strong><p>${q.miss}</p></div><div class="risk"><strong>改进结构</strong><p>${q.advice}</p></div></div></div><div class="panel"><div class="panel-header"><h2>回答表现</h2><span class="tag">训练分</span></div><div class="panel-body ability-list">${[['问题匹配',88],['证据强度',76],['逻辑结构',84],['言语表达',79],['临场反应',82]].map(([n,v])=>`<div class="ability-row"><span>${n}</span><div class="ability-bar"><span style="width:${v}%"></span></div><b>${v}</b></div>`).join('')}</div></div></div></section></div>`}
 
+function preparationSteps(active){return `<div class="preparation-steps"><span class="${active===0?'active':'done'}"><b>${active===0?'1':'✓'}</b>录制授权</span><i></i><span class="${active===1?'active':''}"><b>2</b>设备检测</span></div>`;}
+function radarChart(){
+  const labels=['内容表达','言语表现','表情状态','仪态表现','临场应变'];
+  const scores=[86,78,82,85,76], benchmark=[80,80,80,80,80];
+  const point=(index,value)=>{const angle=-Math.PI/2+index*2*Math.PI/5;return [180+Math.cos(angle)*value*1.24,160+Math.sin(angle)*value*1.24];};
+  const polygon=values=>values.map((v,i)=>point(i,v).join(',')).join(' ');
+  const axes=labels.map((label,i)=>{const [x,y]=point(i,116);const [ex,ey]=point(i,100);return `<line x1="180" y1="160" x2="${ex}" y2="${ey}" stroke="#d6eeea"/><text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle">${label}</text>`;}).join('');
+  return `<section class="report-section radar-section"><div class="report-section-title"><h2>核心能力评估</h2><span>训练表现分 · 5个维度</span></div><div class="radar-content"><svg class="radar-chart" viewBox="0 0 360 325" role="img" aria-label="核心能力雷达图：内容表达86分、言语表现78分、表情状态82分、仪态表现85分、临场应变76分">${[25,50,75,100].map(v=>`<polygon points="${polygon(Array(5).fill(v))}" fill="none" stroke="#dcefeb"/>`).join('')}${axes}<polygon points="${polygon(benchmark)}" fill="none" stroke="#2d91ed" stroke-width="2" stroke-dasharray="4 4"/><polygon points="${polygon(scores)}" fill="rgba(28,198,174,.18)" stroke="#1cc6ae" stroke-width="3"/>${scores.map((v,i)=>{const [x,y]=point(i,v);return `<circle cx="${x}" cy="${y}" r="4" fill="#1cc6ae"/>`;}).join('')}</svg><div class="radar-summary"><strong>整体表现良好</strong><p>内容表达与仪态表现较稳定。下一轮重点训练临场应变和言语节奏。</p><div class="radar-legend"><span><i></i>本次训练</span><span><i></i>训练参考</span></div><div class="radar-score-list">${labels.map((label,i)=>`<div><span>${label}</span><strong>${scores[i]}</strong><small>/100</small></div>`).join('')}</div></div></div></section>`;
+}
+function reportIntro(){return `<section class="report-student"><div class="student-avatar" aria-hidden="true">杨</div><div><span>参训学生</span><strong>杨同学</strong><p>${state.track} · ${state.form.major} · 目标职业：${state.form.targetCareer}</p></div><div class="report-student-meta"><span>训练日期：2026年10月13日</span><span>材料版本 V3 · 规则模板 V1.0</span></div></section>`;}
+
 function records(){return shell(`<div class="page-header"><div><h1>我的训练</h1><p>按训练类型、赛道、材料版本和规则版本追踪历史表现。</p></div>${button('创建训练',"setView('competition')",'primary')}</div><div class="panel"><div class="panel-header"><div class="header-actions"><select class="button"><option>全部训练类型</option><option>职规赛模拟答辩</option><option>师范生模拟试讲</option></select><select class="button"><option>全部赛道</option><option>成长赛道</option><option>就业赛道</option></select></div><span class="small-label">共 6 条记录</span></div><div class="table-wrap"><table><thead><tr><th>训练名称</th><th>类型</th><th>规则/材料版本</th><th>完成时间</th><th>得分</th><th>操作</th></tr></thead><tbody>${[['数字教育产品经理成长规划','成长赛道答辩','规则V1.0 / 材料V3','今天 09:20','86'],['行业知识专项追问','专项训练','评委V2.1','10月10日','78'],['认识轴对称图形','小学数学试讲','题库V1.2','10月8日','82']].map(r=>`<tr>${r.map((x,i)=>`<td>${i===4?`<b class="score" style="font-size:17px">${x}</b>`:x}</td>`).join('')}<td><button class="text-link" onclick="setView('report')">查看报告</button></td></tr>`).join('')}</tbody></table></div></div>`)}
 function special(){return shell(`<div class="page-header"><div><h1>专项训练</h1><p>系统根据最近训练报告推荐针对性的短时训练。</p></div></div><div class="module-grid">${[['证','成果证据核验','识别成果归属、数据来源和证据强度'],['答','高压连续追问','连续问题下保持回答聚焦与逻辑完整'],['业','行业专业知识','围绕目标行业与岗位生成专业追问'],['时','限时回答','30秒、60秒和90秒结构化表达']].map(x=>`<article class="module-card"><div class="module-icon">${x[0]}</div><div><h2>${x[1]}</h2><p>${x[2]}</p></div>${button('开始训练',"showToast('已创建专项训练')",'secondary')}</article>`).join('')}</div>`)}
 
@@ -177,5 +248,18 @@ function teacher(){return shell(`<div class="page-header"><div><h1>教师工作�
 function render(){
   const routes={dashboard, 'teacher-trial':teacherTrial, competition, diagnosis, consent, device, presentation, jury, report, records, special, teacher, tasks:teacher, students:teacher, 'class-analysis':teacher};
   document.getElementById('app').innerHTML=(routes[state.view]||dashboard)();
+  const main=document.querySelector('.main');
+  if(Object.prototype.hasOwnProperty.call(workflowViews,state.view) && state.view!=='competition'){
+    const header=main.querySelector('.page-header, .report-hero');
+    if(header) header.insertAdjacentHTML('afterend',workflowProgress(state.view==='presentation'||state.view==='jury'));
+    else main.insertAdjacentHTML('afterbegin',workflowProgress(true));
+    if(state.view==='consent'||state.view==='device') main.querySelector('.workflow-progress').insertAdjacentHTML('afterend',preparationSteps(state.view==='device'?1:0));
+  }
+  if(state.view==='report'){
+    const hero=main.querySelector('.report-hero');
+    main.querySelector('.workflow-progress').insertAdjacentHTML('afterend',reportIntro());
+    if(state.reportTab==='overview') main.querySelector('.report-tabs').insertAdjacentHTML('afterend',radarChart());
+  }
+  persistWorkflow();
 }
 render();
